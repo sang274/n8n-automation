@@ -2,13 +2,8 @@ version: '3.8'
 
 services:
   n8n:
-    # Cấu hình ép buộc Docker đọc đúng file và đặt tên mới
-    build: 
-      context: .
-      dockerfile: Dockerfile
-    image: n8n-mmo-pro:latest
+    build: .
     container_name: n8n_custom_video
-    shm_size: '2gb'
     restart: always
     ports:
       - "5678:5678"
@@ -19,10 +14,8 @@ services:
       - NODE_ENV=production
       - GENERIC_TIMEZONE=Asia/Ho_Chi_Minh
       - NODE_FUNCTION_ALLOW_BUILTIN=*
-      - "N8N_RESTRICT_FILE_ACCESS_TO=/data/files/;/home/node/.n8n-files"
-      - N8N_RUNNERS_HEARTBEAT_INTERVAL=600000
-      - N8N_RUNNERS_TASK_TIMEOUT=86400
+      - "N8N_RESTRICT_FILE_ACCESS_TO=/data/files/"
+      - NODES_EXCLUDE=[]
     volumes:
       - ./n8n_data:/home/node/.n8n
       - ./local_files:/data/files
-      - D:\study\My_self_project\tiktokUpload\tiktok-uploader:/data/tiktok-uploader

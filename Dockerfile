@@ -26,32 +26,44 @@
 
 # # Lệnh khởi động n8n
 # CMD ["n8n"]
-
-
-# Dùng lõi hệ điều hành Debian 12 (Bookworm) siêu mới và ổn định kèm Node 20
-FROM node:20-bookworm
+FROM node:20-bookworm-slim
 
 USER root
 
-# 1. Cập nhật hệ thống và cài đặt FFMPEG, Python3
-RUN apt-get update && apt-get install -y ffmpeg python3 python3-pip curl
+RUN apt-get update && apt-get install -y --no-install-recommends \
+   ffmpeg python3 python3-pip curl \
+   chromium \
+   libnss3 libfreetype6 libharfbuzz0b ca-certificates fonts-freefont-ttf \
+   libsndfile1 \
+   && rm -rf /var/lib/apt/lists/*
 
-# 2. Cài đặt n8n phiên bản mới nhất toàn cầu
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
 RUN npm install -g n8n
 
-# 3. Cài đặt các công cụ MMO (TikTok Uploader, Playwright...)
-RUN pip3 install tiktok-uploader playwright --break-system-packages
+RUN --mount=type=cache,target=/root/.cache/pip \
+   pip3 install --break-system-packages \
+   yt-dlp edge-tts tiktok-uploader \
+   soundfile \
+   piper-tts
 
-# 4. Tải trình duyệt ngầm Chromium và TẤT CẢ các lõi C++ cần thiết
-RUN playwright install chromium chrome --with-deps
+RUN --mount=type=cache,target=/root/.cache/pip \
+   pip3 install --break-system-packages \
+   --index-url https://download.pytorch.org/whl/cpu \
+   --extra-index-url https://pypi.org/simple \
+   torch \
+   torchaudio
 
-# 5. Khởi tạo thư mục và cấp quyền để n8n chạy an toàn
-RUN mkdir -p /home/node/.n8n && chown -R node:node /home/node
+RUN --mount=type=cache,target=/root/.cache/pip \
+   pip3 install --break-system-packages \
+   demucs \
+   silero-vad
+
+RUN mkdir -p /home/node/.n8n /data/files \
+   && chown -R node:node /home/node /data/files
 
 USER node
 WORKDIR /home/node
-
-# Lệnh khởi động n8n
 CMD ["n8n"]
 
 # docker ps (Lệnh này sẽ liệt kê các container đang chạy. Bạn hãy nhìn cột NAMES để xem tên container n8n của bạn là gì, thường nó sẽ là n8n, n8n-automation-n8n-1 hoặc tương tự).
