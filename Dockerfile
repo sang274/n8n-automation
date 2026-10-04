@@ -48,6 +48,20 @@ RUN playwright install chromium chrome --with-deps
 # 5. Khởi tạo thư mục và cấp quyền để n8n chạy an toàn
 RUN mkdir -p /home/node/.n8n && chown -R node:node /home/node
 
+RUN pip3 install --break-system-packages \
+   --index-url https://download.pytorch.org/whl/cpu \
+   --extra-index-url https://pypi.org/simple \
+   torch \
+   torchaudio
+
+RUN pip3 install --break-system-packages \
+    soundfile
+#    piper-tts
+
+RUN pip3 install --break-system-packages \
+   demucs \
+   silero-vad
+
 USER node
 WORKDIR /home/node
 
