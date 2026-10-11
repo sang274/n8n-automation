@@ -3,8 +3,8 @@
 Audio preprocessing pipeline:
 1. Separate vocals/background with Demucs
 2. Detect human speech in vocals with Silero VAD
-3. Save a full-length human-speech track (silence outside speech)
-4. Save the background (non-human) track
+3. Save a full-length human-speech track
+4. Save the perfect background by SUBTRACTING strictly detected speech from the original audio.
 """
 
 import os
@@ -12,6 +12,7 @@ import sys
 import subprocess
 import shutil
 from pathlib import Path
+import numpy as np 
 
 import torch
 import torchaudio.functional as F
@@ -21,10 +22,11 @@ from silero_vad import load_silero_vad, get_speech_timestamps
 # ---------------------------------------------------------------- config ---
 SAMPLING_RATE = 16000
 
-VAD_THRESHOLD = 0.5
-MIN_SPEECH_MS = 250
-MIN_SILENCE_MS = 300
-SPEECH_PAD_MS = 200
+# 🌟 CÁC THÔNG SỐ ĐÃ ĐƯỢC TINH CHỈNH ĐỂ KHÔNG BỊ CẮT LỐ
+VAD_THRESHOLD = 0.6  # Tăng độ khó: Chắc chắn là giọng người thì mới cắt (Tránh cắt nhầm hiệu ứng)
+MIN_SPEECH_MS = 100  # Bắt cả những tiếng la hét hoặc từ nói ngắn gọn
+MIN_SILENCE_MS = 200
+SPEECH_PAD_MS = 30   # (QUAN TRỌNG) Giảm từ 200ms xuống 30ms. Cắt bám cực sát vào viền giọng nói, giữ lại tối đa hiệu ứng môi trường!
 
 DEMUCS_MODEL = "htdemucs"
 DEVICE = "cpu"
@@ -35,7 +37,6 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "preprocess")
 
 # ---------------------------------------------------------------- demucs ---
 def separate_audio(audio_path: str) -> tuple[str, str]:
-    """Run Demucs 2-stem separation. Returns (vocals_path, no_vocals_path)."""
     audio_path = os.path.abspath(audio_path)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -69,18 +70,14 @@ def separate_audio(audio_path: str) -> tuple[str, str]:
 
 # ------------------------------------------------------------------ VAD ---
 def load_for_vad(path: str) -> torch.Tensor:
-    """Load audio as mono float32 at SAMPLING_RATE for Silero VAD."""
     data, sr = sf.read(path, dtype="float32", always_2d=True)
     audio = torch.from_numpy(data).mean(dim=1)  # -> mono
-
     if sr != SAMPLING_RATE:
         audio = F.resample(audio, sr, SAMPLING_RATE)
-
     return audio
 
 
 def extract_speech(vocals_path: str):
-    """Detect speech segments in the vocal stem. Returns (audio, timestamps)."""
     audio = load_for_vad(vocals_path)
     model = load_silero_vad()
 
@@ -99,30 +96,10 @@ def extract_speech(vocals_path: str):
     return audio, timestamps
 
 
-def build_full_length_speech(audio: torch.Tensor, timestamps: list) -> torch.Tensor:
-    """Keep original timeline; zero out everything except speech segments."""
-    output = torch.zeros_like(audio)
-    for ts in timestamps:
-        output[ts["start"]:ts["end"]] = audio[ts["start"]:ts["end"]]
-    return output
-
-
-# --------------------------------------------------------------- saving ---
-def save_human_audio(audio: torch.Tensor, output_path: str):
-    sf.write(output_path, audio.detach().cpu().numpy(), SAMPLING_RATE)
-
-
-def save_non_human_audio(source_path: str, output_path: str):
-    """Copy Demucs' no_vocals.wav as-is (no resampling needed)."""
-    shutil.copy2(source_path, output_path)
-
-
 def cleanup_demucs_output(vocals_path: str, no_vocals_path: str):
-    """Remove temporary per-file Demucs directory (and model dir if empty)."""
     audio_dir = os.path.dirname(vocals_path)
     if os.path.isdir(audio_dir):
         shutil.rmtree(audio_dir)
-
     model_dir = os.path.dirname(audio_dir)
     if os.path.isdir(model_dir) and not os.listdir(model_dir):
         os.rmdir(model_dir)
@@ -150,17 +127,52 @@ def main():
 
     try:
         print("=== Detecting human speech ===")
-        audio, timestamps = extract_speech(vocals_path)
+        audio_16k, timestamps = extract_speech(vocals_path)
 
-        print("=== Building human speech track ===")
-        human_audio = build_full_length_speech(audio, timestamps)
-        save_human_audio(human_audio, human_output_path)
+        print("=== Building high-quality tracks (Hard Cut - Lồng tiếng) ===")
+        vocals_hq, sr_hq = sf.read(vocals_path)
+        no_vocals_hq, _ = sf.read(no_vocals_path)
 
-        print("=== Saving non-human audio ===")
-        save_non_human_audio(no_vocals_path, non_human_output_path)
+        # 1. Tái tạo Âm thanh gốc nguyên bản
+        original_hq = vocals_hq + no_vocals_hq
+        
+        human_hq = np.zeros_like(vocals_hq)
+        scale_factor = sr_hq / SAMPLING_RATE
+        is_stereo = len(vocals_hq.shape) == 2
+
+        # Làm mềm mép cắt cực nhanh (30ms) để không cắt lẹm vào hiệu ứng xung quanh
+        fade_samples = int((30 / 1000.0) * sr_hq) 
+
+        for ts in timestamps:
+            start_hq = int(ts["start"] * scale_factor)
+            end_hq = int(ts["end"] * scale_factor)
+            
+            chunk_len = end_hq - start_hq
+            chunk = np.copy(vocals_hq[start_hq:end_hq])
+            
+            if chunk_len > fade_samples * 2:
+                fade_in = np.linspace(0, 1, fade_samples)
+                fade_out = np.linspace(1, 0, fade_samples)
+                
+                if is_stereo:
+                    fade_in = np.expand_dims(fade_in, axis=1)
+                    fade_out = np.expand_dims(fade_out, axis=1)
+                
+                chunk[:fade_samples] *= fade_in
+                chunk[-fade_samples:] *= fade_out
+                
+            human_hq[start_hq:end_hq] = chunk
+
+        # 2. XÓA SỔ GIỌNG NÓI KHỎI FILE GỐC (Phase Inversion)
+        # Bất cứ âm thanh nào (chém kiếm, tiếng thở, nhạc...) không phải giọng nói sẽ được giữ lại 100%
+        final_background_hq = original_hq - human_hq
+
+        print("=== Saving output audio ===")
+        sf.write(human_output_path, human_hq, sr_hq)
+        sf.write(non_human_output_path, final_background_hq, sr_hq)
 
         speech_samples = sum(ts["end"] - ts["start"] for ts in timestamps)
-        ratio = speech_samples / len(audio) * 100 if len(audio) else 0
+        ratio = speech_samples / len(audio_16k) * 100 if len(audio_16k) else 0
 
         print("\n=== PREPROCESS COMPLETE ===")
         print(f"segments={len(timestamps)}")
@@ -171,7 +183,6 @@ def main():
     finally:
         print("=== Cleaning temporary Demucs files ===")
         cleanup_demucs_output(vocals_path, no_vocals_path)
-
 
 if __name__ == "__main__":
     main()
