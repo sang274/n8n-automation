@@ -23,6 +23,10 @@ services:
       - N8N_RUNNERS_HEARTBEAT_INTERVAL=600000
       - N8N_RUNNERS_TASK_TIMEOUT=86400
       - NODES_EXCLUDE=[]
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=24      # Chỉ giữ lại log trong vòng 24 giờ
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=none # (Tuỳ chọn) Đừng lưu log nếu chạy thành công, chỉ lưu log lỗi để debug
+      - EXECUTIONS_TIMEOUT=-1
     volumes:
       - ./n8n_data:/home/node/.n8n
       - ./local_files:/data/files

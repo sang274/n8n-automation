@@ -1,5 +1,8 @@
 {
   "name": "installed-nodes",
   "private": true,
-  "dependencies": {}
+  "dependencies": {
+    "@blotato/n8n-nodes-blotato": "1.0.10",
+    "@vybit/n8n-nodes-vybit": "2.5.1"
+  }
 }
